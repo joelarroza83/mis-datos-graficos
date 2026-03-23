@@ -7,25 +7,21 @@ from datetime import datetime
 # 1. Configuración de la página
 st.set_page_config(page_title="FCA UNA - Filial Santa Rosa", layout="wide", page_icon="🌱")
 
-# 2. Encabezado con Logo Grande
+# 2. Encabezado: Logo Ampliado y Títulos Centrados
 try:
     logo = Image.open('logoproyecto.png')
     col_izq, col_centro, col_der = st.columns([0.5, 3, 0.5])
     with col_centro:
-        st.image(logo, width=500)
-    st.markdown("<h1 style='text-align: center; color: #1B5E20;'>Datos de la Facultad de Ciencias Agrarias UNA</h1>", unsafe_allow_html=True)
-    st.markdown("<h3 style='text-align: center; color: #4E342E;'>Filial Santa Rosa - Monitoreo Meteorológico</h3>", unsafe_allow_html=True)
+        st.image(logo, width=550, use_container_width=False)
+    
+    st.markdown("<h1 style='text-align: center; color: #1B5E20; margin-bottom: 0;'>Datos de la Facultad de Ciencias Agrarias UNA</h1>", unsafe_allow_html=True)
+    st.markdown("<h3 style='text-align: center; color: #4E342E; margin-top: 0;'>Filial Santa Rosa - Monitoreo Meteorológico</h3>", unsafe_allow_html=True)
 except Exception:
     st.title("FCA UNA - Filial Santa Rosa")
 
 st.divider()
 
-# 3. SEGURIDAD Y FILTROS EN LA BARRA LATERAL
-st.sidebar.header("🔐 Panel de Control")
-clave_acceso = "FCA2026" 
-user_password = st.sidebar.text_input("Contraseña de Administrador", type="password")
-
-# 4. FUNCIÓN PARA PROCESAR LOS DATOS
+# 3. Función para procesar los datos
 @st.cache_data
 def cargar_datos(archivo):
     try:
@@ -37,74 +33,82 @@ def cargar_datos(archivo):
     except Exception:
         return None
 
-# Carga inicial de datos
+# Carga del archivo base
 nombre_archivo_base = 'open-meteo-26.89S56.87W167m (1).csv'
 df = cargar_datos(nombre_archivo_base)
 
 if df is not None:
-    # --- NUEVA FUNCIÓN: FILTRO POR FECHAS ---
-    st.sidebar.header("📅 Filtrar por Fecha")
+    # --- BARRA LATERAL: SEGURIDAD Y FILTROS ---
+    st.sidebar.header("🔐 Panel de Administración")
+    clave_acceso = "FCA2026" 
+    user_password = st.sidebar.text_input("Contraseña", type="password")
+
+    # Filtro de Fechas (Visible para todos)
+    st.sidebar.divider()
+    st.sidebar.header("📅 Rango de Fechas")
     fecha_min = df['time'].min().date()
     fecha_max = df['time'].max().date()
     
-    rango_fechas = st.sidebar.date_input(
-        "Selecciona el periodo:",
+    rango = st.sidebar.date_input(
+        "Seleccionar periodo:",
         value=(fecha_min, fecha_max),
         min_value=fecha_min,
         max_value=fecha_max
     )
 
-    # Aplicar el filtro si se seleccionan ambas fechas
-    if len(rango_fechas) == 2:
-        inicio, fin = rango_fechas
-        mask = (df['time'].date >= inicio) & (df['time'].date <= fin)
-        df_filtrado = df.loc[mask]
+    # Lógica de filtrado
+    if isinstance(rango, tuple) and len(rango) == 2:
+        inicio, fin = rango
+        df_mostrar = df[(df['time'].dt.date >= inicio) & (df['time'].dt.date <= fin)]
     else:
-        df_filtrado = df
+        df_mostrar = df
 
-    # --- ÁREA RESTRINGIDA: CARGA Y DESCARGA ---
+    # Área Protegida (Carga y Descarga TXT)
     if user_password == clave_acceso:
-        st.sidebar.success("Acceso Autorizado")
+        st.sidebar.success("Acceso de Administrador")
         
-        # Opción de Carga
-        archivo_manual = st.sidebar.file_uploader("📤 Subir nuevo CSV", type=["csv"])
-        if archivo_manual:
-            df_filtrado = cargar_datos(archivo_manual)
-            
-        # Opción de Descarga en TXT (Protegida)
-        st.sidebar.markdown("---")
-        st.sidebar.write("📥 **Descargar datos filtrados:**")
-        
-        # Generar formato TXT
-        txt_data = df_filtrado.to_csv(index=False, sep='\t').encode('utf-8')
+        # Subir nuevo archivo
+        nuevo_archivo = st.sidebar.file_uploader("Actualizar CSV", type=["csv"])
+        if nuevo_archivo:
+            df_mostrar = cargar_datos(nuevo_archivo)
+
+        # Descarga en TXT
+        st.sidebar.write("📥 **Exportar Datos:**")
+        # Generamos el formato de texto plano (separado por tabulaciones)
+        txt_output = df_mostrar.to_csv(index=False, sep='\t').encode('utf-8')
         st.sidebar.download_button(
             label="Descargar en formato .TXT",
-            data=txt_data,
-            file_name=f'datos_fca_{datetime.now().strftime("%d_%m_%Y")}.txt',
+            data=txt_output,
+            file_name=f'fca_santa_rosa_{datetime.now().strftime("%d_%m_%Y")}.txt',
             mime='text/plain',
         )
-    elif user_password != "santarosa2026":
-        st.sidebar.error("Contraseña Incorrecta")
+    elif user_password != "":
+        st.sidebar.error("Clave incorrecta")
 
-    # 5. VISUALIZACIÓN DE DATOS (Métricas y Gráficos)
+    # 4. VISUALIZACIÓN
+    # Métricas principales
     m1, m2, m3 = st.columns(3)
-    temp_actual = df_filtrado.iloc[-1, 2]
-    hum_actual = df_filtrado.iloc[-1, 3]
-    hora_actual = df_filtrado['time'].iloc[-1].strftime('%H:%M hs (%d/%m)')
+    # Mostramos el último dato del rango seleccionado
+    t_act = df_mostrar.iloc[-1, 2]
+    h_act = df_mostrar.iloc[-1, 3]
+    f_act = df_mostrar['time'].iloc[-1].strftime('%H:%M hs - %d/%m')
 
-    m1.metric("Temperatura", f"{temp_actual} °C")
-    m2.metric("Humedad", f"{hum_actual} %")
-    m3.metric("Última Lectura", hora_actual)
+    m1.metric("Temperatura", f"{t_act} °C")
+    m2.metric("Humedad", f"{h_act} %")
+    m3.metric("Fecha/Hora Datos", f_act)
 
-    st.subheader("📈 Análisis de Variables")
-    variables = [c for c in df_filtrado.columns if c != 'time']
-    seleccion = st.selectbox("Variable:", variables)
+    # Gráfico
+    st.subheader("📈 Evolución de Variables")
+    vars_disponibles = [c for c in df_mostrar.columns if c != 'time']
+    sel = st.selectbox("Elija qué visualizar:", vars_disponibles)
     
-    fig = px.line(df_filtrado, x='time', y=seleccion, markers=True, template="plotly_white")
-    fig.update_traces(line_color='#2E7D32') 
+    fig = px.line(df_mostrar, x='time', y=sel, markers=True, template="plotly_white")
+    fig.update_traces(line_color='#2E7D32', line_width=3)
     st.plotly_chart(fig, use_container_width=True)
 
-    with st.expander("📂 Ver registros históricos"):
-        st.dataframe(df_filtrado, use_container_width=True)
+    # Tabla histórica
+    with st.expander("📂 Ver registros detallados"):
+        st.dataframe(df_mostrar, use_container_width=True)
+
 else:
-    st.error("No se pudieron cargar los datos.")
+    st.error("Error: No se encontró el archivo de datos en el repositorio.")
