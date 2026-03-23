@@ -2,17 +2,17 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from PIL import Image
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # 1. Configuración de la página
 st.set_page_config(page_title="FCA UNA - Filial Santa Rosa", layout="wide", page_icon="🌱")
 
-# 2. Encabezado: Logo Ampliado y Títulos Centrados
+# 2. Encabezado: Logo y Títulos
 try:
     logo = Image.open('logoproyecto.png')
     col_izq, col_centro, col_der = st.columns([0.5, 3, 0.5])
     with col_centro:
-        st.image(logo, width=550, use_container_width=False)
+        st.image(logo, width=550)
     
     st.markdown("<h1 style='text-align: center; color: #1B5E20; margin-bottom: 0;'>Datos de la Facultad de Ciencias Agrarias UNA</h1>", unsafe_allow_html=True)
     st.markdown("<h3 style='text-align: center; color: #4E342E; margin-top: 0;'>Filial Santa Rosa - Monitoreo Meteorológico</h3>", unsafe_allow_html=True)
@@ -21,7 +21,7 @@ except Exception:
 
 st.divider()
 
-# 3. Función para procesar los datos
+# 3. Función de carga de datos
 @st.cache_data
 def cargar_datos(archivo):
     try:
@@ -33,82 +33,88 @@ def cargar_datos(archivo):
     except Exception:
         return None
 
-# Carga del archivo base
+# Carga inicial
 nombre_archivo_base = 'open-meteo-26.89S56.87W167m (1).csv'
-df = cargar_datos(nombre_archivo_base)
+df_base = cargar_datos(nombre_archivo_base)
 
-if df is not None:
-    # --- BARRA LATERAL: SEGURIDAD Y FILTROS ---
-    st.sidebar.header("🔐 Panel de Administración")
-    clave_acceso = "FCA2026" 
-    user_password = st.sidebar.text_input("Contraseña", type="password")
-
-    # Filtro de Fechas (Visible para todos)
-    st.sidebar.divider()
-    st.sidebar.header("📅 Rango de Fechas")
-    fecha_min = df['time'].min().date()
-    fecha_max = df['time'].max().date()
+if df_base is not None:
+    # --- BARRA LATERAL ---
+    st.sidebar.header("🔐 Administración")
+    admin_pass = st.sidebar.text_input("Acceso Administrador (Subir datos)", type="password")
     
+    if admin_pass == "FCA2026":
+        nuevo_archivo = st.sidebar.file_uploader("Actualizar base CSV", type=["csv"])
+        if nuevo_archivo:
+            df_base = cargar_datos(nuevo_archivo)
+
+    st.sidebar.divider()
+    st.sidebar.header("📅 Filtro de Fechas")
+    
+    # Rango por defecto: Últimos 7 días
+    max_fecha = df_base['time'].max().date()
+    min_siete_dias = max_fecha - timedelta(days=7)
+    min_absoluta = df_base['time'].min().date()
+
     rango = st.sidebar.date_input(
         "Seleccionar periodo:",
-        value=(fecha_min, fecha_max),
-        min_value=fecha_min,
-        max_value=fecha_max
+        value=(min_siete_dias, max_fecha),
+        min_value=min_absoluta,
+        max_value=max_fecha
     )
 
-    # Lógica de filtrado
+    # APLICACIÓN DEL FILTRO AL DATAFRAME
     if isinstance(rango, tuple) and len(rango) == 2:
         inicio, fin = rango
-        df_mostrar = df[(df['time'].dt.date >= inicio) & (df['time'].dt.date <= fin)]
+        # Filtramos el dataframe original para crear el "recorte" solicitado
+        df_filtrado = df_base[(df_base['time'].dt.date >= inicio) & (df_base['time'].dt.date <= fin)]
     else:
-        df_mostrar = df
+        df_filtrado = df_base[df_base['time'].dt.date >= min_siete_dias]
 
-    # Área Protegida (Carga y Descarga TXT)
-    if user_password == clave_acceso:
-        st.sidebar.success("Acceso de Administrador")
+    # 4. MÉTRICAS (Basadas en el último dato del rango filtrado)
+    if not df_filtrado.empty:
+        m1, m2, m3 = st.columns(3)
+        t_act = df_filtrado.iloc[-1, 2]
+        h_act = df_filtrado.iloc[-1, 3]
+        f_act = df_filtrado['time'].iloc[-1].strftime('%H:%M hs - %d/%m/%Y')
+
+        m1.metric("Temperatura", f"{t_act} °C")
+        m2.metric("Humedad", f"{h_act} %")
+        m3.metric("Último Registro en Rango", f_act)
+
+        # 5. GRÁFICO (Solo del rango pulsado)
+        st.subheader(f"📈 Análisis del Periodo Seleccionado")
+        vars_disp = [c for c in df_filtrado.columns if c != 'time']
+        sel = st.selectbox("Variable:", vars_disp)
         
-        # Subir nuevo archivo
-        nuevo_archivo = st.sidebar.file_uploader("Actualizar CSV", type=["csv"])
-        if nuevo_archivo:
-            df_mostrar = cargar_datos(nuevo_archivo)
+        fig = px.line(df_filtrado, x='time', y=sel, markers=True, template="plotly_white")
+        fig.update_traces(line_color='#2E7D32', line_width=3)
+        st.plotly_chart(fig, use_container_width=True)
 
-        # Descarga en TXT
-        st.sidebar.write("📥 **Exportar Datos:**")
-        # Generamos el formato de texto plano (separado por tabulaciones)
-        txt_output = df_mostrar.to_csv(index=False, sep='\t').encode('utf-8')
-        st.sidebar.download_button(
-            label="Descargar en formato .TXT",
-            data=txt_output,
-            file_name=f'fca_santa_rosa_{datetime.now().strftime("%d_%m_%Y")}.txt',
-            mime='text/plain',
-        )
-    elif user_password != "":
-        st.sidebar.error("Clave incorrecta")
+        # 6. TABLA Y DESCARGA PROTEGIDA (Solo datos filtrados)
+        st.divider()
+        col_tab, col_btn = st.columns([2, 1])
+        
+        with col_tab:
+            st.write("📂 **Registros en el rango seleccionado**")
+            st.dataframe(df_filtrado, use_container_width=True)
 
-    # 4. VISUALIZACIÓN
-    # Métricas principales
-    m1, m2, m3 = st.columns(3)
-    # Mostramos el último dato del rango seleccionado
-    t_act = df_mostrar.iloc[-1, 2]
-    h_act = df_mostrar.iloc[-1, 3]
-    f_act = df_mostrar['time'].iloc[-1].strftime('%H:%M hs - %d/%m')
-
-    m1.metric("Temperatura", f"{t_act} °C")
-    m2.metric("Humedad", f"{h_act} %")
-    m3.metric("Fecha/Hora Datos", f_act)
-
-    # Gráfico
-    st.subheader("📈 Evolución de Variables")
-    vars_disponibles = [c for c in df_mostrar.columns if c != 'time']
-    sel = st.selectbox("Elija qué visualizar:", vars_disponibles)
-    
-    fig = px.line(df_mostrar, x='time', y=sel, markers=True, template="plotly_white")
-    fig.update_traces(line_color='#2E7D32', line_width=3)
-    st.plotly_chart(fig, use_container_width=True)
-
-    # Tabla histórica
-    with st.expander("📂 Ver registros detallados"):
-        st.dataframe(df_mostrar, use_container_width=True)
+        with col_btn:
+            st.write("🔒 **Área de Descarga (.txt)**")
+            pass_descarga = st.text_input("Clave para exportar este rango", type="password")
+            
+            if pass_descarga == "santarosa2026":
+                # La descarga usa df_filtrado, así que respeta el calendario
+                txt_output = df_filtrado.to_csv(index=False, sep='\t').encode('utf-8')
+                st.download_button(
+                    label="💾 Descargar Rango Seleccionado",
+                    data=txt_output,
+                    file_name=f'FCA_SantaRosa_{inicio}_al_{fin}.txt',
+                    mime='text/plain',
+                )
+            elif pass_descarga != "":
+                st.error("Clave incorrecta")
+    else:
+        st.warning("No hay datos para el rango de fechas seleccionado.")
 
 else:
-    st.error("Error: No se encontró el archivo de datos en el repositorio.")
+    st.error("No se pudo cargar la base de datos.")
