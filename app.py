@@ -6,51 +6,45 @@ from datetime import datetime, timedelta
 import os
 
 # ==========================================
-# 1. CONFIGURACIÓN Y ESTILO
+# 1. CONFIGURACIÓN DE PESTAÑA (DNS/INSTITUCIONAL)
 # ==========================================
-st.set_page_config(page_title="FCA UNA - Santa Rosa", layout="wide", page_icon="🌱")
-
-# Ocultar menús innecesarios de Streamlit (Opcional)
-st.markdown("""
-    <style>
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    </style>
-    """, unsafe_allow_html=True)
+st.set_page_config(
+    page_title="FCA UNA - Monitoreo Meteorológico", 
+    layout="wide", 
+    page_icon="🌱"
+)
 
 # ==========================================
-# 2. ENCABEZADO
+# 2. ENCABEZADO OFICIAL
 # ==========================================
 try:
     logo = Image.open('logoproyecto.png')
-    col_l, col_c, col_r = st.columns([1, 2, 1])
-    with col_c:
+    col_a, col_b, col_c = st.columns([1, 2, 1])
+    with col_b:
         st.image(logo, use_container_width=True)
-    st.markdown("<h1 style='text-align: center; color: #1B5E20;'>Monitoreo Meteorológico FCA UNA</h1>", unsafe_allow_html=True)
-    st.markdown("<p style='text-align: center; font-size: 20px;'>Filial Santa Rosa - Agrometeorología</p>", unsafe_allow_html=True)
+    st.markdown("<h1 style='text-align: center; color: #1B5E20;'>Facultad de Ciencias Agrarias - UNA</h1>", unsafe_allow_html=True)
+    st.markdown("<h3 style='text-align: center; color: #388E3C;'>Estación Agrometeorológica - Filial Santa Rosa</h3>", unsafe_allow_html=True)
 except:
     st.title("FCA UNA - Filial Santa Rosa")
 
 st.divider()
 
 # ==========================================
-# 3. MOTOR DE CARGA UNIVERSAL (INTELIGENTE)
+# 3. MOTOR DE CARGA (2025-2026)
 # ==========================================
 @st.cache_data(ttl=60)
-def cargar_base_datos():
+def cargar_datos_fca():
     archivos = ['datos_clima2025.csv', 'datos_clima2026.csv']
     dfs = []
     
     for nombre in archivos:
         if os.path.exists(nombre):
             try:
-                # Motor python + skip bad lines para evitar el error del 21 de marzo
+                # Motor robusto para evitar cortes de fecha
                 df_t = pd.read_csv(nombre, skiprows=3, on_bad_lines='skip', engine='python', encoding='utf-8')
-                
-                # Normalizar nombres de columnas
                 df_t.columns = [c.strip() for c in df_t.columns]
                 
-                # Identificar columna de tiempo
+                # Búsqueda dinámica de la columna de tiempo
                 col_tiempo = [c for c in df_t.columns if 'time' in c.lower()]
                 
                 if col_tiempo:
@@ -62,10 +56,9 @@ def cargar_base_datos():
                 
     if not dfs: return None
     
-    # Unir archivos y limpiar
     df_full = pd.concat(dfs, ignore_index=True).dropna(subset=['Fecha'])
     
-    # Convertir todas las variables detectadas a números
+    # Conversión masiva de variables a números
     for col in df_full.columns:
         if col != 'Fecha':
             df_full[col] = pd.to_numeric(df_full[col], errors='coerce')
@@ -73,109 +66,91 @@ def cargar_base_datos():
     return df_full.sort_values('Fecha').drop_duplicates().reset_index(drop=True)
 
 # ==========================================
-# 4. PANEL DE ADMINISTRADOR (CARGA MANUAL)
+# 4. ADMIN PANEL (Contraseña: FCA2026)
 # ==========================================
-st.sidebar.header("🔐 Acceso Admin")
-admin_pw = st.sidebar.text_input("Contraseña Administrador:", type="password")
+st.sidebar.header("🔐 Administración")
+acceso = st.sidebar.text_input("Clave de Acceso:", type="password")
 
-if admin_pw == "FCA2026":
-    st.sidebar.success("🔓 Modo Administrador Activo")
-    st.sidebar.subheader("Actualizar Archivos")
+if acceso == "FCA2026":
+    st.sidebar.success("Sesión de Administrador")
+    archivo_reemplazar = st.sidebar.selectbox("Archivo a actualizar:", ["datos_clima2026.csv", "datos_clima2025.csv"])
+    file_upload = st.sidebar.file_uploader(f"Cargar nuevo {archivo_reemplazar}", type=['csv'])
     
-    archivo_opcion = st.sidebar.selectbox("Archivo a reemplazar:", ["datos_clima2026.csv", "datos_clima2025.csv"])
-    f_subido = st.sidebar.file_uploader(f"Cargar nuevo {archivo_opcion}", type=['csv'])
-    
-    if f_subido is not None:
-        # Validación previa rápida
+    if file_upload:
         try:
-            test_df = pd.read_csv(f_subido, skiprows=3, nrows=5)
-            st.sidebar.info(f"OK: Detectadas {len(test_df.columns)} variables.")
+            # Validación rápida
+            df_check = pd.read_csv(file_upload, skiprows=3, nrows=1)
+            st.sidebar.write(f"✅ Archivo válido ({len(df_check.columns)} variables)")
             
-            if st.sidebar.button(f"🚀 Confirmar Reemplazo"):
-                with open(archivo_opcion, "wb") as f:
-                    f.write(f_subido.getbuffer())
-                
+            if st.sidebar.button("🚀 ACTUALIZAR AHORA"):
+                with open(archivo_reemplazar, "wb") as f:
+                    f.write(file_upload.getbuffer())
                 st.sidebar.balloons()
-                st.sidebar.success("✅ ¡ARCHIVO ACTUALIZADO!")
+                st.sidebar.success("OK: Base de datos actualizada.")
                 st.cache_data.clear()
                 st.rerun()
-        except Exception as e:
-            st.sidebar.error(f"Error en formato: {e}")
+        except:
+            st.sidebar.error("Archivo no compatible.")
 
 st.sidebar.divider()
 
 # ==========================================
-# 5. INTERFAZ DE USUARIO Y GRÁFICOS
+# 5. DASHBOARD PARA EL PÚBLICO
 # ==========================================
-df_base = cargar_base_datos()
+df_base = cargar_datos_fca()
 
 if df_base is not None and not df_base.empty:
     f_min, f_max = df_base['Fecha'].min(), df_base['Fecha'].max()
     
-    # Información de estado en la barra lateral
-    st.sidebar.header("📊 Estado de la Red")
-    st.sidebar.write(f"**Último dato:** {f_max.strftime('%d/%m/%Y %H:%M')}")
-    st.sidebar.write(f"**Total registros:** {len(df_base):,}")
+    st.sidebar.header("📊 Información")
+    st.sidebar.info(f"📅 Registros hasta: \n{f_max.strftime('%d/%m/%Y %H:%M')}")
 
-    # Filtro de fecha
     rango = st.sidebar.date_input(
-        "Rango de fechas:",
+        "Filtrar Periodo:",
         value=(f_max.date() - timedelta(days=7), f_max.date()),
         min_value=f_min.date(),
         max_value=f_max.date()
     )
 
     if isinstance(rango, tuple) and len(rango) == 2:
-        df_plot = df_base[(df_base['Fecha'].dt.date >= rango[0]) & (df_base['Fecha'].dt.date <= rango[1])]
+        df_filtered = df_base[(df_base['Fecha'].dt.date >= rango[0]) & (df_base['Fecha'].dt.date <= rango[1])]
         
-        if not df_plot.empty:
-            # Selector de todas las variables dinámicamente
-            vars_encontradas = [c for c in df_plot.columns if c != 'Fecha']
-            var_sel = st.selectbox("Seleccione la variable a visualizar:", vars_encontradas)
+        if not df_filtered.empty:
+            # Lista de todas las variables del CSV
+            todas_vars = [c for c in df_filtered.columns if c != 'Fecha']
+            variable = st.selectbox("Seleccione el parámetro a visualizar:", todas_vars)
 
             # Métricas
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Máximo", f"{df_plot[var_sel].max():.1f}")
-            m2.metric("Mínimo", f"{df_plot[var_sel].min():.1f}")
-            m3.metric("Promedio", f"{df_plot[var_sel].mean():.1f}")
-            m4.metric("Actual", f"{df_plot[var_sel].iloc[-1]:.1f}")
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("Máximo", f"{df_filtered[variable].max():.1f}")
+            c2.metric("Mínimo", f"{df_filtered[variable].min():.1f}")
+            c3.metric("Promedio", f"{df_filtered[variable].mean():.1f}")
+            c4.metric("Último dato", f"{df_filtered[variable].iloc[-1]:.1f}")
 
-            # Gráfico Principal
-            fig = px.line(df_plot, x='Fecha', y=var_sel, markers=True, template="plotly_white")
-            fig.update_traces(line_color='#2E7D32', line_width=2)
-            fig.update_xaxes(rangeslider_visible=True, title="Línea de Tiempo")
+            # Gráfico con diseño institucional
+            fig = px.line(df_filtered, x='Fecha', y=variable, markers=True, template="plotly_white")
+            fig.update_traces(line_color='#2E7D32', line_width=2.5)
+            fig.update_xaxes(rangeslider_visible=True, title="Fecha y Hora")
             fig.update_layout(hovermode="x unified")
             st.plotly_chart(fig, use_container_width=True)
 
-            # ==========================================
-            # 6. DESCARGA DE DATOS (SEGURA)
-            # ==========================================
+            # --- DESCARGA (Contraseña: santarosa2026) ---
             st.divider()
-            st.subheader("📥 Descarga de Reportes")
-            col_pw, col_btn = st.columns([1, 1])
-            
-            with col_pw:
-                pw_descarga = st.text_input("Ingrese clave de descarga:", type="password")
-            
-            with col_btn:
-                st.write("") # Espaciador
-                st.write("") 
-                if pw_descarga == "santarosa2026":
-                    csv_export = df_plot.to_csv(index=False, sep='\t').encode('utf-8')
+            col1, col2 = st.columns([1, 2])
+            with col1:
+                pw_desc = st.text_input("Clave de descarga:", type="password")
+                if pw_desc == "santarosa2026":
+                    csv_bytes = df_filtered.to_csv(index=False, sep='\t').encode('utf-8')
                     st.download_button(
-                        label=f"💾 Descargar {var_sel} ({len(df_plot)} filas)",
-                        data=csv_export,
-                        file_name=f"FCA_SR_{var_sel}_{rango[0]}.txt",
-                        mime="text/plain"
+                        label="💾 Descargar Reporte (.txt)",
+                        data=csv_bytes,
+                        file_name=f"FCA_SR_Reporte.txt"
                     )
-                elif pw_descarga != "":
-                    st.warning("Clave incorrecta")
-
         else:
-            st.warning("No hay datos para el periodo seleccionado.")
+            st.warning("No hay datos en ese periodo.")
 else:
-    st.warning("⚠️ No se encontraron datos. Por favor, use el modo Administrador para subir los archivos CSV.")
+    st.error("⚠️ Base de datos no encontrada. Por favor, cargue los archivos CSV.")
 
-# Pie de página
+# Pie de página institucional
 st.markdown("---")
-st.markdown("<p style='text-align: center; color: gray;'>Sistema de Monitoreo Agrometeorológico - FCA UNA Santa Rosa © 2026</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: gray;'>Facultad de Ciencias Agrarias - Universidad Nacional de Asunción | Santa Rosa, Paraguay</p>", unsafe_allow_html=True)
