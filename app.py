@@ -20,7 +20,7 @@ except:
 
 st.divider()
 
-# 3. Función de carga con "REGLA ESTRICTA DE FECHA"
+# 3. Función de carga con DETECCIÓN AUTOMÁTICA DE FORMATO
 @st.cache_data
 def cargar_datos(archivo):
     try:
@@ -28,17 +28,21 @@ def cargar_datos(archivo):
         df.columns = df.columns.str.strip()
         
         if 'time' in df.columns:
-            # FORZAMOS el formato que veo en tu captura: día/mes/año hora:minuto
-            df['time'] = pd.to_datetime(df['time'], format='%d/%m/%Y %H:%M', errors='coerce')
+            # Intento 1: Formato con guiones (2026-03-20) como se ve en tu Excel
+            df['time'] = pd.to_datetime(df['time'], errors='coerce')
             
-            # Si el formato anterior falla (algunos CSV usan guiones), probamos el genérico
-            df['time'] = df['time'].fillna(pd.to_datetime(df['time'], dayfirst=True, errors='coerce'))
+            # Intento 2: Si hay nulos, probar formato día primero (20/03/2026)
+            mask = df['time'].isna()
+            if mask.any():
+                df.loc[mask, 'time'] = pd.to_datetime(df.loc[mask, 'time'], dayfirst=True, errors='coerce')
             
-            # Limpieza: Quitamos errores y fechas futuras (más allá de hoy)
+            # Limpieza de seguridad
             df = df.dropna(subset=['time'])
-            df = df[df['time'] <= datetime.now()]
+            # Eliminamos fechas futuras erróneas (posteriores a mañana)
+            limite = datetime.now() + timedelta(days=1)
+            df = df[df['time'] <= limite]
             
-            # ORDENAMOS: Muy importante para que el 2025 aparezca al inicio
+            # ORDENAR de más viejo a más nuevo
             df = df.sort_values(by='time').reset_index(drop=True)
             
         return df
@@ -69,7 +73,7 @@ if df_base is not None and not df_base.empty:
     st.sidebar.info(f"Desde: {min_f.strftime('%d/%m/%Y')}")
     st.sidebar.info(f"Hasta: {max_f.strftime('%d/%m/%Y')}")
 
-    # Selector de Rango
+    # Selector de Rango (Inicia en los últimos 7 días)
     rango = st.sidebar.date_input(
         "Filtrar fechas:",
         value=(max_f - timedelta(days=7), max_f),
@@ -94,7 +98,7 @@ if df_base is not None and not df_base.empty:
         m3.metric("Último Registro", ultima['time'].strftime('%d/%m/%Y %H:%M'))
 
         # Gráfico
-        st.subheader(f"📈 Gráfico: {inicio} al {fin}")
+        st.subheader(f"📈 Análisis Agrometeorológico")
         opciones = [c for c in df_final.columns if c != 'time']
         variable = st.selectbox("Parámetro:", opciones)
         
@@ -107,17 +111,17 @@ if df_base is not None and not df_base.empty:
         st.write("🔒 **Descarga Protegida**")
         col_p, col_b = st.columns([1, 1])
         with col_p:
-            c_desc = st.text_input("Clave de descarga", type="password")
+            c_desc = st.text_input("Contraseña de descarga", type="password")
         with col_b:
             if c_desc == "santarosa2026":
                 txt = df_final.to_csv(index=False, sep='\t').encode('utf-8')
                 st.download_button(
-                    label=f"💾 Descargar Rango Seleccionado",
+                    label=f"💾 Descargar {len(df_final)} registros (.txt)",
                     data=txt,
-                    file_name=f"FCA_SR_{inicio}_a_{fin}.txt",
+                    file_name=f"FCA_SR_Reporte_{inicio}_{fin}.txt",
                     mime="text/plain"
                 )
     else:
         st.warning("No hay datos en ese periodo.")
 else:
-    st.error("No se detectaron datos. Asegúrate de que el archivo en GitHub se llame 'datos_clima.csv'.")
+    st.error("Error: El sistema no detectó datos válidos. Revisa que el archivo en GitHub se llame 'datos_clima.csv' y tenga datos de 2025.")
