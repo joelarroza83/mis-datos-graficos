@@ -82,7 +82,7 @@ with col_l2:
         st.title("FCA UNA")
 
 # --- RESALTE DE LA SEDE (NUEVO) ---
-st.markdown('<div class="sede-badge">📍 SEDE SANTA ROSA - MISIONES</div>', unsafe_allow_html=True)
+st.markdown('<div class="sede-badge">📍 FILIAL SANTA ROSA - MISIONES</div>', unsafe_allow_html=True)
 
 st.markdown("<h2 style='text-align: center; color: #1B5E20; margin-top:-10px;'>Red de Monitoreo Agrometeorológico</h2>", unsafe_allow_html=True)
 st.divider()
