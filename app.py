@@ -20,7 +20,7 @@ except:
 
 st.divider()
 
-# 3. Función de carga con FILTRO ANTI-FUTURO
+# 3. Función de carga con "REGLA ESTRICTA DE FECHA"
 @st.cache_data
 def cargar_datos(archivo):
     try:
@@ -28,23 +28,22 @@ def cargar_datos(archivo):
         df.columns = df.columns.str.strip()
         
         if 'time' in df.columns:
-            # Forzamos la lectura: día primero
-            df['time'] = pd.to_datetime(df['time'], dayfirst=True, errors='coerce')
+            # FORZAMOS el formato que veo en tu captura: día/mes/año hora:minuto
+            df['time'] = pd.to_datetime(df['time'], format='%d/%m/%Y %H:%M', errors='coerce')
             
-            # ELIMINAMOS FILAS CON ERRORES
+            # Si el formato anterior falla (algunos CSV usan guiones), probamos el genérico
+            df['time'] = df['time'].fillna(pd.to_datetime(df['time'], dayfirst=True, errors='coerce'))
+            
+            # Limpieza: Quitamos errores y fechas futuras (más allá de hoy)
             df = df.dropna(subset=['time'])
+            df = df[df['time'] <= datetime.now()]
             
-            # --- LIMPIEZA CRÍTICA ---
-            # Solo permitimos fechas entre el 2025 y HOY (Marzo 2026)
-            fecha_hoy = datetime.now()
-            df = df[(df['time'] >= '2025-01-01') & (df['time'] <= fecha_hoy)]
-            
-            # Ordenamos para que el gráfico no sea una línea recta loca
+            # ORDENAMOS: Muy importante para que el 2025 aparezca al inicio
             df = df.sort_values(by='time').reset_index(drop=True)
             
         return df
     except Exception as e:
-        st.error(f"Error técnico: {e}")
+        st.error(f"Error al procesar el archivo: {e}")
         return None
 
 # Carga de la base de datos
@@ -54,7 +53,7 @@ df_base = cargar_datos(nombre_archivo_base)
 if df_base is not None and not df_base.empty:
     # --- PANEL LATERAL ---
     st.sidebar.header("🔐 Administración")
-    admin_pass = st.sidebar.text_input("Clave Admin (Subir)", type="password")
+    admin_pass = st.sidebar.text_input("Clave Admin", type="password")
     if admin_pass == "FCA2026":
         subida = st.sidebar.file_uploader("Actualizar datos_clima.csv", type=["csv"])
         if subida:
@@ -62,11 +61,11 @@ if df_base is not None and not df_base.empty:
 
     st.sidebar.divider()
     
-    # Rango Real detectado tras la limpieza
+    # Rango Real detectado tras la corrección
     min_f = df_base['time'].min().date()
     max_f = df_base['time'].max().date()
     
-    st.sidebar.header("📅 Periodo de Datos Válidos")
+    st.sidebar.header("📅 Periodo Detectado")
     st.sidebar.info(f"Desde: {min_f.strftime('%d/%m/%Y')}")
     st.sidebar.info(f"Hasta: {max_f.strftime('%d/%m/%Y')}")
 
@@ -92,7 +91,7 @@ if df_base is not None and not df_base.empty:
         ultima = df_final.iloc[-1]
         m1.metric("Temperatura", f"{ultima.iloc[2]} °C")
         m2.metric("Humedad", f"{ultima.iloc[3]} %")
-        m3.metric("Último Dato Real", ultima['time'].strftime('%d/%m/%Y %H:%M'))
+        m3.metric("Último Registro", ultima['time'].strftime('%d/%m/%Y %H:%M'))
 
         # Gráfico
         st.subheader(f"📈 Gráfico: {inicio} al {fin}")
@@ -121,4 +120,4 @@ if df_base is not None and not df_base.empty:
     else:
         st.warning("No hay datos en ese periodo.")
 else:
-    st.error("No se detectaron datos válidos. Revisa el formato de fecha en 'datos_clima.csv'.")
+    st.error("No se detectaron datos. Asegúrate de que el archivo en GitHub se llame 'datos_clima.csv'.")
