@@ -3,137 +3,104 @@ import pandas as pd
 import plotly.express as px
 from PIL import Image
 from datetime import datetime, timedelta
-import io
 
 # 1. Configuración de la página
-st.set_page_config(page_title="FCA UNA - Filial Santa Rosa", layout="wide", page_icon="🌱")
+st.set_page_config(page_title="FCA UNA - Santa Rosa", layout="wide", page_icon="🌱")
 
 # 2. Encabezado
 try:
     logo = Image.open('logoproyecto.png')
-    col_izq, col_centro, col_der = st.columns([0.5, 3, 0.5])
-    with col_centro:
-        st.image(logo, width=500)
-    st.markdown("<h1 style='text-align: center; color: #1B5E20;'>Datos de la Facultad de Ciencias Agrarias UNA</h1>", unsafe_allow_html=True)
-    st.markdown("<h3 style='text-align: center; color: #4E342E;'>Filial Santa Rosa - Monitoreo Meteorológico</h3>", unsafe_allow_html=True)
+    st.image(logo, width=500)
 except:
     st.title("FCA UNA - Filial Santa Rosa")
 
-st.divider()
-
-# 3. FUNCIÓN DE CARGA "ANTIBLOQUEO"
+# 3. FUNCIÓN DE RECONSTRUCCIÓN TOTAL (Lector de Emergencia)
 @st.cache_data
-def cargar_datos(archivo):
+def cargar_datos_seguro(nombre_archivo):
     try:
-        # Leemos el archivo saltando las 3 líneas de Open-Meteo
-        # 'on_bad_lines' evita que se corte la lectura si hay una fila mal escrita
-        df = pd.read_csv(
-            archivo, 
-            skiprows=3, 
-            engine='python', 
-            on_bad_lines='skip', 
-            encoding='utf-8',
-            sep=None # Detecta automáticamente si es coma o punto y coma
-        )
+        # Leemos el archivo completo como texto plano para evitar bloqueos de CSV
+        with open(nombre_archivo, 'r', encoding='utf-8') as f:
+            lineas = f.readlines()
         
-        # Limpieza de nombres de columnas
-        df.columns = [str(c).strip() for c in df.columns]
+        # Saltamos las primeras 3 líneas de encabezado de Open-Meteo
+        datos_utiles = lineas[3:]
         
-        if 'time' in df.columns:
-            # Conversión de fecha ultra-flexible (ignora errores de texto)
-            df['time'] = pd.to_datetime(df['time'], dayfirst=True, errors='coerce')
-            
-            # Eliminamos filas que no pudieron convertirse en fecha
-            df = df.dropna(subset=['time'])
-            
-            # Filtro de Seguridad: Solo datos desde 2025 hasta hoy
-            # (Esto elimina ese error de "diciembre 2026" que veíamos antes)
-            fecha_maxima = datetime.now() + timedelta(days=1)
-            df = df[(df['time'] >= '2025-01-01') & (df['time'] <= fecha_maxima)]
-            
-            # Ordenar para que el 2025 aparezca primero
-            df = df.sort_values(by='time').reset_index(drop=True)
-            
-        return df
+        # Buscamos la cabecera (time, temp, etc.)
+        header = datos_utiles[0].strip().split(',')
+        header = [h.strip() for h in header]
+        
+        filas_limpias = []
+        for i, linea in enumerate(datos_utiles[1:]):
+            partes = linea.strip().split(',')
+            # SOLO aceptamos filas que tengan el mismo número de columnas que la cabecera
+            if len(partes) == len(header):
+                filas_limpias.append(partes)
+        
+        # Creamos el DataFrame
+        df = pd.DataFrame(filas_limpias, columns=header)
+        
+        # Convertimos columnas numéricas (Temperatura, Humedad, etc.)
+        for col in df.columns:
+            if col != 'time':
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+        
+        # Conversión de FECHA con máxima tolerancia
+        df['time'] = pd.to_datetime(df['time'], errors='coerce')
+        
+        # LIMPIEZA FINAL
+        df = df.dropna(subset=['time']) # Fuera errores
+        df = df[df['time'] >= '2025-01-01'] # Solo desde 2025
+        df = df[df['time'] <= datetime.now() + timedelta(days=1)] # No futuro
+        
+        return df.sort_values('time').reset_index(drop=True)
+        
     except Exception as e:
-        st.error(f"Error al procesar el archivo: {e}")
+        st.error(f"Error en reconstrucción: {e}")
         return None
 
-# Carga de la base de datos
-nombre_archivo_base = 'datos_clima.csv'
-df_base = cargar_datos(nombre_archivo_base)
+# Carga
+df_base = cargar_datos_seguro('datos_clima.csv')
 
 if df_base is not None and not df_base.empty:
     # --- PANEL LATERAL ---
-    st.sidebar.header("🔐 Administración")
-    admin_pass = st.sidebar.text_input("Acceso Administrador", type="password")
-    if admin_pass == "FCA2026":
-        subida = st.sidebar.file_uploader("Actualizar datos_clima.csv", type=["csv"])
-        if subida:
-            df_base = cargar_datos(subida)
-
-    st.sidebar.divider()
+    st.sidebar.header("📊 Diagnóstico de Datos")
     
-    # VERIFICACIÓN DE DATOS DETECTADOS
-    min_f = df_base['time'].min().date()
-    max_f = df_base['time'].max().date()
-    total_filas = len(df_base)
+    # Esto nos dirá si realmente leyó el 2025
+    total = len(df_base)
+    inicio_real = df_base['time'].min()
+    fin_real = df_base['time'].max()
     
-    st.sidebar.header("📊 Resumen del Archivo")
-    st.sidebar.success(f"**Inicio:** {min_f.strftime('%d/%m/%Y')}")
-    st.sidebar.success(f"**Fin:** {max_f.strftime('%d/%m/%Y')}")
-    st.sidebar.write(f"Total registros leídos: **{total_filas}**")
+    st.sidebar.info(f"Registros recuperados: {total}")
+    st.sidebar.write(f"📅 **Desde:** {inicio_real.strftime('%d/%m/%Y')}")
+    st.sidebar.write(f"📅 **Hasta:** {fin_real.strftime('%d/%m/%Y')}")
 
-    # Selector de Rango (Por defecto: últimos 7 días)
+    # Selector de Rango
     rango = st.sidebar.date_input(
-        "Filtrar periodo a visualizar:",
-        value=(max_f - timedelta(days=7), max_f),
-        min_value=min_f,
-        max_value=max_f
+        "Periodo a visualizar:",
+        value=(fin_real.date() - timedelta(days=7), fin_real.date()),
+        min_value=inicio_real.date(),
+        max_value=fin_real.date()
     )
 
-    # 4. FILTRADO PARA DASHBOARD
+    # 4. FILTRADO Y GRÁFICO
     if isinstance(rango, tuple) and len(rango) == 2:
-        inicio, fin = rango
-        df_final = df_base[(df_base['time'].dt.date >= inicio) & (df_base['time'].dt.date <= fin)]
+        df_final = df_base[(df_base['time'].dt.date >= rango[0]) & (df_base['time'].dt.date <= rango[1])]
     else:
         df_final = df_base
 
-    # 5. VISUALIZACIÓN
     if not df_final.empty:
-        # Métricas
-        m1, m2, m3 = st.columns(3)
-        u = df_final.iloc[-1]
-        m1.metric("Temperatura", f"{u.iloc[2]} °C")
-        m2.metric("Humedad", f"{u.iloc[3]} %")
-        m3.metric("Última Fecha", u['time'].strftime('%d/%m/%Y %H:%M'))
-
-        # Gráfico
-        st.subheader(f"📈 Gráfico Agrometeorológico ({inicio} - {fin})")
-        variables = [c for c in df_final.columns if c != 'time']
-        sel = st.selectbox("Parámetro:", variables)
+        st.subheader(f"📈 Análisis Agrometeorológico")
+        var = st.selectbox("Parámetro:", [c for c in df_final.columns if c != 'time'])
         
-        fig = px.line(df_final, x='time', y=sel, markers=True, template="plotly_white")
-        fig.update_traces(line_color='#2E7D32', line_width=2)
+        fig = px.line(df_final, x='time', y=var, markers=True, template="plotly_white")
+        fig.update_traces(line_color='#2E7D32')
         st.plotly_chart(fig, use_container_width=True)
-
-        # 6. DESCARGA TXT PROTEGIDA (santarosa2026)
+        
+        # 5. DESCARGA (santarosa2026)
         st.divider()
-        st.write("🔒 **Descarga de Datos Seleccionados**")
-        col_p, col_b = st.columns([1, 1])
-        with col_p:
-            clave = st.text_input("Clave de descarga", type="password")
-        with col_b:
-            if clave == "santarosa2026":
-                txt = df_final.to_csv(index=False, sep='\t').encode('utf-8')
-                st.write("---")
-                st.download_button(
-                    label=f"💾 Descargar {len(df_final)} filas (.txt)",
-                    data=txt,
-                    file_name=f"FCA_SR_{inicio}_a_{fin}.txt",
-                    mime="text/plain"
-                )
-    else:
-        st.warning("No hay datos para este rango.")
+        passw = st.text_input("Clave para descargar este rango (.txt)", type="password")
+        if passw == "santarosa2026":
+            txt = df_final.to_csv(index=False, sep='\t').encode('utf-8')
+            st.download_button("💾 Descargar Selección", txt, f"FCA_SR_{rango[0]}.txt")
 else:
-    st.error("Error crítico: El sistema no puede leer el 2025. Revisa que el archivo 'datos_clima.csv' en GitHub contenga realmente esos datos.")
+    st.error("El archivo 'datos_clima.csv' está vacío o tiene un error de origen que impide leer el 2025.")
