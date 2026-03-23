@@ -13,7 +13,9 @@ try:
     
     col1, col2 = st.columns([1, 6])
     with col1:
-        st.image(logo, width=120)
+        # --- AUMENTO DE TAMAÑO DEL LOGO ---
+        # Cambié width=120 por width=250 para que sea más grande.
+        st.image(logo, width=250)
     with col2:
         st.title("Datos de la Facultad de Ciencias Agrarias UNA")
         st.subheader("Filial Santa Rosa - Monitoreo Meteorológico")
