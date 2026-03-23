@@ -18,108 +18,99 @@ except:
 
 st.divider()
 
-# 3. MOTOR DE CARGA "INTELIGENTE" (Busca variables por palabra clave)
+# 3. MOTOR DE CARGA UNIVERSAL (Lee todas las columnas existentes)
 @st.cache_data(ttl=300)
-def cargar_datos_completos():
+def cargar_datos_universales():
     archivos = ['datos_clima2025.csv', 'datos_clima2026.csv']
     dfs = []
     
     for nombre in archivos:
         if os.path.exists(nombre):
             try:
-                # Leemos con motor python para mayor tolerancia a errores de línea
+                # Leemos el archivo completo
+                # skiprows=3 suele ser el estándar de Open-Meteo para llegar a la cabecera
                 df_t = pd.read_csv(nombre, skiprows=3, on_bad_lines='skip', engine='python', encoding='utf-8')
-                df_t.columns = [c.strip().lower() for c in df_t.columns] # Normalizamos nombres
                 
-                # Mapeo flexible: Buscamos la columna que contenga la palabra clave
-                mapeo_columnas = {}
+                # Limpiamos nombres de columnas (quitar espacios y saltos de línea)
+                df_t.columns = [c.strip() for c in df_t.columns]
                 
-                # Buscamos 'time'
-                cols_time = [c for c in df_t.columns if 'time' in c]
-                if cols_time: mapeo_columnas[cols_time[0]] = 'Fecha'
+                # Buscamos la columna de tiempo (indispensable)
+                col_tiempo = [c for c in df_t.columns if 'time' in c.lower()]
                 
-                # Buscamos 'temp' (Temperatura)
-                cols_temp = [c for c in df_t.columns if 'temp' in c]
-                if cols_temp: mapeo_columnas[cols_temp[0]] = 'Temperatura (°C)'
-                
-                # Buscamos 'hum' (Humedad)
-                cols_hum = [c for c in df_t.columns if 'hum' in c]
-                if cols_hum: mapeo_columnas[cols_hum[0]] = 'Humedad (%)'
-                
-                # Buscamos 'precip' (Precipitación)
-                cols_prec = [c for c in df_t.columns if 'precip' in c]
-                if cols_prec: mapeo_columnas[cols_prec[0]] = 'Precipitación (mm)'
-
-                # Renombramos y filtramos solo lo encontrado
-                df_clean = df_t[list(mapeo_columnas.keys())].rename(columns=mapeo_columnas)
-                
-                # Conversión de fecha
-                df_clean['Fecha'] = pd.to_datetime(df_clean['Fecha'], errors='coerce')
-                dfs.append(df_clean)
-                st.sidebar.success(f"✅ {nombre} leído")
+                if col_tiempo:
+                    # Renombramos la columna de tiempo a algo estándar para el código
+                    df_t = df_t.rename(columns={col_tiempo[0]: 'Fecha'})
+                    # Convertimos a formato fecha
+                    df_t['Fecha'] = pd.to_datetime(df_t['Fecha'], errors='coerce')
+                    dfs.append(df_t)
+                    st.sidebar.success(f"✅ {nombre} cargado")
             except Exception as e:
                 st.sidebar.error(f"❌ Error en {nombre}: {e}")
     
     if not dfs: return None
     
-    # Unir todo y limpiar
+    # Unir todos los archivos
     df_full = pd.concat(dfs, ignore_index=True)
-    df_full = df_full.dropna(subset=['Fecha']).drop_duplicates().sort_values('Fecha').reset_index(drop=True)
+    df_full = df_full.dropna(subset=['Fecha'])
     
-    # Convertir variables a números
+    # Convertir todas las demás columnas a números automáticamente
     for col in df_full.columns:
         if col != 'Fecha':
             df_full[col] = pd.to_numeric(df_full[col], errors='coerce')
             
-    return df_full
+    return df_full.sort_values('Fecha').drop_duplicates().reset_index(drop=True)
 
 # Ejecución
-df_base = cargar_datos_completos()
+df_base = cargar_datos_universales()
 
 if df_base is not None and not df_base.empty:
-    # --- INFO EN SIDEBAR ---
+    # --- PANEL LATERAL ---
     f_min, f_max = df_base['Fecha'].min(), df_base['Fecha'].max()
     st.sidebar.divider()
-    st.sidebar.info(f"📅 **Inicio:** {f_min.strftime('%d/%m/%Y %H:%M')}")
-    st.sidebar.info(f"📅 **Fin Detectado:** {f_max.strftime('%d/%m/%Y %H:%M')}")
-    st.sidebar.metric("Registros totales", f"{len(df_base):,}")
+    st.sidebar.info(f"📅 **Datos desde:** {f_min.strftime('%d/%m/%Y')}")
+    st.sidebar.info(f"📅 **Datos hasta:** {f_max.strftime('%d/%m/%Y')}")
+    st.sidebar.write(f"🔢 Registros totales: **{len(df_base):,}**")
 
     # Selector de Rango
     rango = st.sidebar.date_input(
-        "Periodo:",
+        "Periodo a visualizar:",
         value=(f_max.date() - timedelta(days=7), f_max.date()),
         min_value=f_min.date(),
         max_value=f_max.date()
     )
 
-    # 4. DASHBOARD
+    # 4. FILTRADO
     if isinstance(rango, tuple) and len(rango) == 2:
-        df_plot = df_base[(df_base['Fecha'].dt.date >= rango[0]) & (df_base['Fecha'].dt.date <= rango[1])]
+        df_p = df_base[(df_base['Fecha'].dt.date >= rango[0]) & (df_base['Fecha'].dt.date <= rango[1])]
     else:
-        df_plot = df_base
+        df_p = df_base
 
-    if not df_plot.empty:
-        # Selector de todas las variables detectadas
-        vars_disponibles = [c for c in df_plot.columns if c != 'Fecha']
-        var_sel = st.selectbox("Seleccione Variable del Archivo:", vars_disponibles)
+    if not df_p.empty:
+        # SELECTOR DINÁMICO: Muestra TODAS las variables encontradas en el CSV
+        todas_las_variables = [c for c in df_p.columns if c != 'Fecha']
+        
+        st.subheader("📊 Análisis de Variables")
+        var_seleccionada = st.selectbox("Seleccione la variable que desea observar:", todas_las_variables)
 
-        # Métricas
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Máximo", f"{df_plot[var_sel].max():.1f}")
-        col2.metric("Mínimo", f"{df_plot[var_sel].min():.1f}")
-        col3.metric("Último Registro", f"{df_plot[var_sel].iloc[-1]:.1f}")
+        # Métricas de la variable elegida
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Máximo", f"{df_p[var_seleccionada].max():.2f}")
+        c2.metric("Mínimo", f"{df_p[var_seleccionada].min():.2f}")
+        c3.metric("Promedio", f"{df_p[var_seleccionada].mean():.2f}")
+        c4.metric("Último dato", f"{df_p[var_seleccionada].iloc[-1]:.2f}")
 
         # Gráfico
-        fig = px.line(df_plot, x='Fecha', y=var_sel, markers=True, template="plotly_white", color_discrete_sequence=['#2E7D32'])
+        fig = px.line(df_p, x='Fecha', y=var_seleccionada, markers=True, template="plotly_white")
+        fig.update_traces(line_color='#2E7D32', line_width=2)
         fig.update_xaxes(rangeslider_visible=True)
         st.plotly_chart(fig, use_container_width=True)
 
         # 5. DESCARGA
         st.divider()
         if st.text_input("Clave de descarga", type="password") == "santarosa2026":
-            csv_data = df_plot.to_csv(index=False, sep='\t').encode('utf-8')
-            st.download_button("💾 Bajar datos", csv_data, f"FCA_Export_{rango[0]}.txt")
+            csv = df_p.to_csv(index=False, sep='\t').encode('utf-8')
+            st.download_button("💾 Descargar selección actual", csv, f"FCA_SR_Export.txt")
     else:
-        st.warning("No hay datos para las fechas seleccionadas.")
+        st.warning("No hay datos para el rango seleccionado.")
 else:
-    st.error("No se pudo extraer ninguna variable. Revisa el formato de tus archivos CSV.")
+    st.error("No se detectaron variables. Verifica que los archivos CSV tengan una columna llamada 'time'.")
