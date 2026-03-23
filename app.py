@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.express as px
 from PIL import Image
 from datetime import datetime, timedelta
+import io
 
 # 1. Configuración de la página
 st.set_page_config(page_title="FCA UNA - Filial Santa Rosa", layout="wide", page_icon="🌱")
@@ -20,32 +21,42 @@ except:
 
 st.divider()
 
-# 3. FUNCIÓN DE CARGA POR FRAGMENTOS (Soluciona el problema de años divididos)
+# 3. FUNCIÓN DE CARGA "ANTIBLOQUEO"
 @st.cache_data
 def cargar_datos(archivo):
     try:
-        # Cargamos el archivo completo asegurando que no se detenga por errores de formato
-        df = pd.read_csv(archivo, skiprows=3, on_bad_lines='skip', engine='python')
-        df.columns = df.columns.str.strip()
+        # Leemos el archivo saltando las 3 líneas de Open-Meteo
+        # 'on_bad_lines' evita que se corte la lectura si hay una fila mal escrita
+        df = pd.read_csv(
+            archivo, 
+            skiprows=3, 
+            engine='python', 
+            on_bad_lines='skip', 
+            encoding='utf-8',
+            sep=None # Detecta automáticamente si es coma o punto y coma
+        )
+        
+        # Limpieza de nombres de columnas
+        df.columns = [str(c).strip() for c in df.columns]
         
         if 'time' in df.columns:
-            # Forzamos la conversión de fecha de manera ultra-flexible
-            # Esto detectará tanto 2025-01-01 como 01/01/2025
+            # Conversión de fecha ultra-flexible (ignora errores de texto)
             df['time'] = pd.to_datetime(df['time'], dayfirst=True, errors='coerce')
             
-            # Limpieza: eliminamos filas donde la fecha falló
+            # Eliminamos filas que no pudieron convertirse en fecha
             df = df.dropna(subset=['time'])
             
-            # Filtro de seguridad: Solo desde 2025 hasta hoy
-            fecha_limite = datetime.now() + timedelta(days=1)
-            df = df[(df['time'] >= '2025-01-01') & (df['time'] <= fecha_limite)]
+            # Filtro de Seguridad: Solo datos desde 2025 hasta hoy
+            # (Esto elimina ese error de "diciembre 2026" que veíamos antes)
+            fecha_maxima = datetime.now() + timedelta(days=1)
+            df = df[(df['time'] >= '2025-01-01') & (df['time'] <= fecha_maxima)]
             
-            # ORDENAMIENTO TOTAL: Esto es lo que permite "dividir" por años en el filtro
-            df = df.sort_values(by='time', ascending=True).reset_index(drop=True)
+            # Ordenar para que el 2025 aparezca primero
+            df = df.sort_values(by='time').reset_index(drop=True)
             
         return df
     except Exception as e:
-        st.error(f"Error de lectura en el archivo CSV: {e}")
+        st.error(f"Error al procesar el archivo: {e}")
         return None
 
 # Carga de la base de datos
@@ -57,32 +68,31 @@ if df_base is not None and not df_base.empty:
     st.sidebar.header("🔐 Administración")
     admin_pass = st.sidebar.text_input("Acceso Administrador", type="password")
     if admin_pass == "FCA2026":
-        subida = st.sidebar.file_uploader("Actualizar base CSV", type=["csv"])
+        subida = st.sidebar.file_uploader("Actualizar datos_clima.csv", type=["csv"])
         if subida:
             df_base = cargar_datos(subida)
 
     st.sidebar.divider()
     
-    # DETECCIÓN DE AÑOS DISPONIBLES
-    # Esta parte responde a tu duda: permite al usuario ver qué años hay
-    años_disponibles = df_base['time'].dt.year.unique()
-    st.sidebar.header("📊 Resumen de Datos")
-    st.sidebar.write(f"Años detectados: **{', '.join(map(str, años_disponibles))}**")
-    
+    # VERIFICACIÓN DE DATOS DETECTADOS
     min_f = df_base['time'].min().date()
     max_f = df_base['time'].max().date()
+    total_filas = len(df_base)
     
-    st.sidebar.info(f"Rango: {min_f.strftime('%d/%m/%Y')} al {max_f.strftime('%d/%m/%Y')}")
+    st.sidebar.header("📊 Resumen del Archivo")
+    st.sidebar.success(f"**Inicio:** {min_f.strftime('%d/%m/%Y')}")
+    st.sidebar.success(f"**Fin:** {max_f.strftime('%d/%m/%Y')}")
+    st.sidebar.write(f"Total registros leídos: **{total_filas}**")
 
-    # Selector de Rango (Permite elegir desde 2025 a 2026 libremente)
+    # Selector de Rango (Por defecto: últimos 7 días)
     rango = st.sidebar.date_input(
-        "Seleccione el periodo (2025-2026):",
+        "Filtrar periodo a visualizar:",
         value=(max_f - timedelta(days=7), max_f),
         min_value=min_f,
         max_value=max_f
     )
 
-    # 4. FILTRADO DINÁMICO
+    # 4. FILTRADO PARA DASHBOARD
     if isinstance(rango, tuple) and len(rango) == 2:
         inicio, fin = rango
         df_final = df_base[(df_base['time'].dt.date >= inicio) & (df_base['time'].dt.date <= fin)]
@@ -93,40 +103,37 @@ if df_base is not None and not df_base.empty:
     if not df_final.empty:
         # Métricas
         m1, m2, m3 = st.columns(3)
-        ultima = df_final.iloc[-1]
-        m1.metric("Temperatura", f"{ultima.iloc[2]} °C")
-        m2.metric("Humedad", f"{ultima.iloc[3]} %")
-        m3.metric("Última Lectura", ultima['time'].strftime('%d/%m/%Y %H:%M'))
+        u = df_final.iloc[-1]
+        m1.metric("Temperatura", f"{u.iloc[2]} °C")
+        m2.metric("Humedad", f"{u.iloc[3]} %")
+        m3.metric("Última Fecha", u['time'].strftime('%d/%m/%Y %H:%M'))
 
         # Gráfico
-        st.subheader(f"📈 Visualización de Datos ({inicio} - {fin})")
+        st.subheader(f"📈 Gráfico Agrometeorológico ({inicio} - {fin})")
+        variables = [c for c in df_final.columns if c != 'time']
+        sel = st.selectbox("Parámetro:", variables)
         
-        # Selector de variable
-        vars_disp = [c for c in df_final.columns if c != 'time']
-        seleccion = st.selectbox("Parámetro a graficar:", vars_disp)
-        
-        fig = px.line(df_final, x='time', y=seleccion, markers=True, template="plotly_white")
+        fig = px.line(df_final, x='time', y=sel, markers=True, template="plotly_white")
         fig.update_traces(line_color='#2E7D32', line_width=2)
-        # Añadimos una barra deslizante abajo para navegar meses fácilmente
-        fig.update_xaxes(rangeslider_visible=True)
         st.plotly_chart(fig, use_container_width=True)
 
-        # 6. DESCARGA TXT (santarosa2026)
+        # 6. DESCARGA TXT PROTEGIDA (santarosa2026)
         st.divider()
-        st.write("🔒 **Exportación de Datos Seleccionados**")
+        st.write("🔒 **Descarga de Datos Seleccionados**")
         col_p, col_b = st.columns([1, 1])
         with col_p:
-            c_desc = st.text_input("Contraseña de descarga", type="password")
+            clave = st.text_input("Clave de descarga", type="password")
         with col_b:
-            if c_desc == "santarosa2026":
+            if clave == "santarosa2026":
                 txt = df_final.to_csv(index=False, sep='\t').encode('utf-8')
+                st.write("---")
                 st.download_button(
-                    label=f"💾 Descargar Rango Seleccionado ({len(df_final)} registros)",
+                    label=f"💾 Descargar {len(df_final)} filas (.txt)",
                     data=txt,
-                    file_name=f"FCA_SR_Datos_{inicio}_{fin}.txt",
+                    file_name=f"FCA_SR_{inicio}_a_{fin}.txt",
                     mime="text/plain"
                 )
     else:
-        st.warning("No hay datos para el rango seleccionado.")
+        st.warning("No hay datos para este rango.")
 else:
-    st.error("No se detectaron datos. El archivo 'datos_clima.csv' podría estar mal estructurado.")
+    st.error("Error crítico: El sistema no puede leer el 2025. Revisa que el archivo 'datos_clima.csv' en GitHub contenga realmente esos datos.")
