@@ -5,7 +5,7 @@ from PIL import Image
 from datetime import datetime, timedelta
 import os
 
-# 1. Configuración de la página
+# 1. Configuración
 st.set_page_config(page_title="FCA UNA - Santa Rosa", layout="wide", page_icon="🌱")
 
 # 2. Encabezado
@@ -18,70 +18,64 @@ except:
 
 st.divider()
 
-# 3. CARGA INDEPENDIENTE Y UNIÓN FORZADA
+# 3. EL NUEVO ENFOQUE: Lector de Flujo de Texto (Ignora bloqueos)
 @st.cache_data
-def cargar_y_unir_archivos():
-    # Definimos los archivos por año
-    archivos = {
-        "2025": "datos_clima2025.csv",
-        "2026": "datos_clima2026.csv"
-    }
-    
-    lista_datos = []
-    
-    for año, nombre in archivos.items():
+def carga_forzada_multianual():
+    archivos = ['datos_clima2025.csv', 'datos_clima2026.csv']
+    columnas_finales = ['time', 'temperature_2m (°C)', 'relative_humidity_2m (%)', 'dew_point_2m (°C)', 'apparent_temperature (°C)', 'precipitation (mm)', 'rain (mm)']
+    datos_recuperados = []
+
+    for nombre in archivos:
         if os.path.exists(nombre):
             try:
-                # Leemos el archivo de ese año
-                df_temp = pd.read_csv(nombre, skiprows=3, on_bad_lines='skip', engine='python')
-                df_temp.columns = df_temp.columns.str.strip()
-                
-                if 'time' in df_temp.columns:
-                    # Convertimos fechas de ese año específico
-                    df_temp['time'] = pd.to_datetime(df_temp['time'], dayfirst=True, errors='coerce')
-                    df_temp = df_temp.dropna(subset=['time'])
+                with open(nombre, 'r', encoding='utf-8', errors='ignore') as f:
+                    # Saltamos las primeras 4 líneas (Open-Meteo header + nombres de columnas originales)
+                    lineas = f.readlines()[4:] 
                     
-                    # Nos aseguramos de que solo tenga datos de ese año para evitar solapamientos
-                    df_temp = df_temp[df_temp['time'].dt.year == int(año)]
-                    
-                    lista_datos.append(df_temp)
-                    st.sidebar.success(f"✅ Archivo {año} cargado correctamente.")
+                    for i, linea in enumerate(lineas):
+                        partes = linea.strip().split(',')
+                        # Validamos que la línea tenga datos y no sea solo comas
+                        if len(partes) >= 3 and partes[0] != "":
+                            datos_recuperados.append(partes[:len(columnas_finales)])
+                st.sidebar.success(f"✅ {nombre} procesado línea por línea.")
             except Exception as e:
-                st.sidebar.error(f"❌ Error leyendo {nombre}: {e}")
-        else:
-            st.sidebar.warning(f"⚠️ No se encontró el archivo: {nombre}")
-
-    if not lista_datos:
+                st.sidebar.error(f"❌ Error crítico en {nombre}: {e}")
+    
+    if not datos_recuperados:
         return None
-    
-    # UNIÓN: Pegamos los años uno debajo del otro
-    df_unido = pd.concat(lista_datos, axis=0, ignore_index=True)
-    
-    # Ordenamos por fecha (del más viejo al más nuevo)
-    df_unido = df_unido.sort_values(by='time').reset_index(drop=True)
-    
-    # Filtro anti-futuro
-    df_unido = df_unido[df_unido['time'] <= datetime.now() + timedelta(days=1)]
-    
-    return df_unido
 
-# Ejecutar la carga
-df_base = cargar_y_unir_archivos()
+    # Creamos el DataFrame desde la lista de líneas limpias
+    df = pd.DataFrame(datos_recuperados, columns=columnas_finales)
+    
+    # Conversión Forzada de Tipos
+    df['time'] = pd.to_datetime(df['time'], dayfirst=True, errors='coerce')
+    for col in columnas_finales[1:]:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+    
+    # Limpieza final: quitar nulos, ordenar y quitar duplicados
+    df = df.dropna(subset=['time']).drop_duplicates().sort_values('time').reset_index(drop=True)
+    
+    # Filtro de seguridad (no ver datos del futuro lejano por error de fecha)
+    df = df[df['time'] <= datetime.now() + timedelta(days=2)]
+    
+    return df
+
+# Ejecución de la carga
+df_base = carga_forzada_multianual()
 
 if df_base is not None and not df_base.empty:
-    # --- PANEL LATERAL ---
+    # --- PANEL LATERAL DE DIAGNÓSTICO ---
     st.sidebar.divider()
-    f_min = df_base['time'].min()
-    f_max = df_base['time'].max()
+    f_min, f_max = df_base['time'].min(), df_base['time'].max()
     
-    st.sidebar.header("📅 Control de Datos")
-    st.sidebar.write(f"**Inicio Real:** {f_min.strftime('%d/%m/%Y')}")
-    st.sidebar.write(f"**Fin Real:** {f_max.strftime('%d/%m/%Y')}")
-    st.sidebar.write(f"**Total Registros:** {len(df_base)}")
+    st.sidebar.header("📊 Datos en Memoria")
+    st.sidebar.info(f"📅 **Desde:** {f_min.strftime('%d/%m/%Y')}")
+    st.sidebar.info(f"📅 **Hasta:** {f_max.strftime('%d/%m/%Y')}")
+    st.sidebar.write(f"🔢 Registros totales: **{len(df_base)}**")
 
     # Selector de Rango
     rango = st.sidebar.date_input(
-        "Periodo a visualizar:",
+        "Filtrar fechas:",
         value=(f_max.date() - timedelta(days=7), f_max.date()),
         min_value=f_min.date(),
         max_value=f_max.date()
@@ -89,34 +83,26 @@ if df_base is not None and not df_base.empty:
 
     # 4. FILTRADO
     if isinstance(rango, tuple) and len(rango) == 2:
-        df_final = df_base[(df_base['time'].dt.date >= rango[0]) & (df_base['time'].dt.date <= rango[1])]
+        df_plot = df_base[(df_base['time'].dt.date >= rango[0]) & (df_base['time'].dt.date <= rango[1])]
     else:
-        df_final = df_base
+        df_plot = df_base
 
-    # 5. VISUALIZACIÓN
-    if not df_final.empty:
-        st.subheader(f"📊 Análisis: {rango[0]} al {rango[1]}")
+    # 5. GRÁFICO
+    if not df_plot.empty:
+        st.subheader(f"📈 Gráfico: {rango[0]} al {rango[1]}")
+        var = st.selectbox("Parámetro:", [c for c in df_plot.columns if c != 'time'])
         
-        # Métricas rápidas
-        col1, col2, col3 = st.columns(3)
-        u = df_final.iloc[-1]
-        col1.metric("Última Temp.", f"{u.iloc[2]} °C")
-        col2.metric("Última Hum.", f"{u.iloc[3]} %")
-        col3.metric("Fecha/Hora", u['time'].strftime('%H:%M - %d/%m'))
-
-        # Gráfico con Slider
-        var = st.selectbox("Variable:", [c for c in df_final.columns if c != 'time'])
-        fig = px.line(df_final, x='time', y=var, markers=True, template="plotly_white", color_discrete_sequence=['#2E7D32'])
+        fig = px.line(df_plot, x='time', y=var, markers=True, template="plotly_white", color_discrete_sequence=['#2E7D32'])
         fig.update_xaxes(rangeslider_visible=True)
         st.plotly_chart(fig, use_container_width=True)
 
-        # 6. EXPORTACIÓN
+        # 6. DESCARGA (santarosa2026)
         st.divider()
-        passw = st.text_input("Clave de descarga", type="password")
-        if passw == "santarosa2026":
-            txt = df_final.to_csv(index=False, sep='\t').encode('utf-8')
-            st.download_button("💾 Descargar Selección", txt, f"FCA_SR_{rango[0]}.txt")
+        pw = st.text_input("Clave de descarga", type="password")
+        if pw == "santarosa2026":
+            txt = df_plot.to_csv(index=False, sep='\t').encode('utf-8')
+            st.download_button("💾 Descargar Selección (.txt)", txt, f"Datos_FCA_{rango[0]}.txt")
     else:
-        st.warning("No hay datos en las fechas elegidas.")
+        st.warning("No hay datos para el rango seleccionado.")
 else:
-    st.error("No se pudo cargar la base de datos. Verifica que los nombres de archivo en GitHub coincidan.")
+    st.error("No se detectaron archivos válidos en GitHub. Asegúrate de que se llamen 'datos_clima2025.csv' y 'datos_clima2026.csv'.")
